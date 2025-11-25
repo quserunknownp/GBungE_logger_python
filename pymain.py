@@ -1,6 +1,7 @@
 # main
 
-from logFetcher import *
+from pylogFetcher import *
+from pylogPostProcessor import LogVisualizer
 
 log_data = VehicleLog()
 
@@ -14,10 +15,16 @@ log_data = VehicleLog()
 # fname = setfilename('2025-08-29 09-09-27.log'); flg_cnti = 0; # Laps: 0/0/0, Remarks: 동적 성능 2
 # fname = setfilename('2025-08-29 09-11-42.log'); flg_cnti = 1; # Laps: 0/0/0, Remarks: 동적 성능 2(이어짐)
 # fname = setfilename('.log') % Laps: 0/0/0, Remarks:
+# % fname = '2025-08-30 01-58-39.log'; % 2일차 온도 터진거(테스트주행)
+# % fname = '2025-08-30 06-08-15.log'; % 오토크로스
+# % fname = '2025-08-30 08-32-10.log'; % 예선
+# % fname = '2025-08-31 01-13-33.log'; % 본선1 ( 충격으로 꺼짐)
+# % fname = '2025-08-31 01-33-25.log'; % 본선2 (재시작 후 피트인)
+# % fname = '2025-08-31 01-48-43.log'; % 본선3 (김경민 10분)
+#  fname = '2025-08-31 02-03-58.log'; % 본선4 (임동윤, 임동윤, 김경민) 
+# % fname = '2025-08-31 03-07-25.log'; %
 
-file_list = [setfilename('2025-08-29 09-01-23.log'),
-             setfilename('2025-08-29 09-04-01.log'),
-             setfilename('2025-08-29 09-05-08.log')]
+file_list = [setfilename('2025-08-31 02-03-58.log')]
 # 이어지는 데이터는 함께 넣을 것.
 
 for idx, fname in enumerate(file_list):
@@ -49,21 +56,14 @@ for idx, fname in enumerate(file_list):
 
 
 if __name__ == "__main__":    
-    print("\n" + "="*30)
-    print(" [최종 데이터 확인] ")
-    print("="*30)
-    
-    # 데이터가 잘 들어갔는지 Shape 확인
-    if log_data.CAN_set is not None:
-        print(f"CAN_set shape: {log_data.CAN_set.shape}")
-        # 예시: 첫 번째 데이터의 시간값 출력
-        print(f"First timestamp: {log_data.currAct_set[0, 0]}")
-    else:
-        print("CAN_set is empty.")
 
-    if log_data.currAct_set is not None:
-        print(f"currAct_set shape: {log_data.currAct_set.shape}")
+    visualizer = LogVisualizer(log_data)
     
-    # 카운터 확인
-    print(f"Total Sources Counted: {log_data.cnt_source}")
-    print(log_data.currAct_set)
+    print("Graph 1: 토크 응답성 확인")
+    visualizer.plot_torque_performance()
+    
+    print("Graph 2: 벡터 제어(Id/Iq) 상태 확인")
+    visualizer.plot_vector_control()
+
+    print("Graph 3: 약계자 제어")
+    visualizer.plot_field_weakening()
