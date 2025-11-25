@@ -40,15 +40,30 @@ for idx, fname in enumerate(file_list):
 
     except FileNotFoundError:
         print(f"Error: File {fname} not found.")
+        continue # 파일 없으면 다음 파일로 넘어감
 
-
-    cnt_tot_sub
-    
-    # MATLAB의 if/else 로직이 이 한 줄로 끝납니다!
     is_first = (idx == 0)
     log_data.allocate_or_extend(cnt_tot_sub, is_first)
+    log_data.parse_file(fname)
+
 
 
 if __name__ == "__main__":    
-    print(len(log_data.CAN_set[0]))
+    print("\n" + "="*30)
+    print(" [최종 데이터 확인] ")
+    print("="*30)
     
+    # 데이터가 잘 들어갔는지 Shape 확인
+    if log_data.CAN_set is not None:
+        print(f"CAN_set shape: {log_data.CAN_set.shape}")
+        # 예시: 첫 번째 데이터의 시간값 출력
+        print(f"First timestamp: {log_data.currAct_set[0, 0]}")
+    else:
+        print("CAN_set is empty.")
+
+    if log_data.currAct_set is not None:
+        print(f"currAct_set shape: {log_data.currAct_set.shape}")
+    
+    # 카운터 확인
+    print(f"Total Sources Counted: {log_data.cnt_source}")
+    print(log_data.currAct_set)
