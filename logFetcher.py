@@ -7,13 +7,11 @@ import numpy as np
 import os
 """Used to read file"""
 
-
 # setting const
 
 rawAcc2g = 4/512
 mls2sec = 1e-3
 rawSpd2kph = 1.852 / 100
-
 
 # setting var
 
@@ -21,38 +19,120 @@ class VehicleLog:
     """Class for data"""
     def __init__(self):
         """변수 초기화"""
-        self.source_set = None
-        self.CAN_set = None
-        self.key_set = None
-        self.torqueAct_set = None
-        self.currAct_set = None
-        self.vel_set = None
+        self.source_set     = None
+        self.CAN_set        = None
+        self.key_set        = None
+
+        self.torqueAct_set  = None
+        self.currAct_set    = None
+        self.vel_set        = None
         
-        self.ud_set = None
-        self.uq_set = None
-        self.Vmod_set = None
-        self.Vcap_set = None
+        self.ud_set         = None
+        self.uq_set         = None
+        self.Vmod_set       = None
+        self.Vcap_set       = None
             
-        self.L_set = None
-        self.Vlim_set = None
-        self.Iflux_set = None
-        self.Iqmax_set = None
+        self.L_set          = None
+        self.Vlim_set       = None
+        self.Iflux_set      = None
+        self.Iqmax_set      = None
             
-        self.motorTemp_set = None
-        self.Ibatt_set = None
-        self.Tdmd_set = None
-            
-        self.Vtgt_set = None
-        self.Idq_set = None
-        self.acc_set = None
-        self.gpsPos_set = None
-        self.gpsVec_set = None
+        self.motorTemp_set  = None
+        self.Ibatt_set      = None
+        self.Tdmd_set       = None
+
+        self.Vtgt_set       = None
+        self.Idq_set        = None
+        self.acc_set        = None
+        self.gpsPos_set     = None
+        self.gpsVec_set     = None
     def allocate_or_extend(self, n_points, is_first_file):
         """
         n_points: 이번 파일에서 읽을 데이터 개수 (cnt_tot_sub)
         is_first_file: 첫 번째 파일인지 여부 (0이 첫 파일) (True/False)
         """
+        new_source      = np.full((1, n_points), np.nan)
+        new_CAN         = np.full((8, n_points), np.nan)
+        new_key         = np.full((1, n_points), np.nan)
 
+        new_torqueAct   = np.full((2, n_points), np.nan)
+        new_currAct     = np.full((2, n_points), np.nan)
+        new_vel         = np.full((2, n_points), np.nan)
+        
+        new_ud          = np.full((2, n_points), np.nan)
+        new_uq          = np.full((2, n_points), np.nan)
+        new_Vmod        = np.full((2, n_points), np.nan)
+        new_Vcap        = np.full((2, n_points), np.nan)
+        
+        new_L           = np.full((2, n_points), np.nan)
+        new_Vlim        = np.full((2, n_points), np.nan)
+        new_Iflux       = np.full((2, n_points), np.nan)
+        new_Iqmax       = np.full((2, n_points), np.nan)
+        
+        new_motorTemp   = np.full((2, n_points), np.nan)
+        new_Ibatt       = np.full((2, n_points), np.nan)
+        new_Tdmd        = np.full((2, n_points), np.nan)
+        
+        new_Vtgt        = np.full((2, n_points), np.nan)
+        new_Idq         = np.full((3, n_points), np.nan)
+        new_acc         = np.full((4, n_points), np.nan)
+        new_gpsPos      = np.full((3, n_points), np.nan)
+        new_gpsVec      = np.full((3, n_points), np.nan)
+
+        if (is_first_file == True):
+            self.source_set     = new_source   
+            self.CAN_set        = new_CAN
+            self.key_set        = new_key
+            self.torqueAct_set  = new_torqueAct
+            self.currAct_set    = new_currAct
+            self.vel_set        = new_vel
+
+            self.ud_set         = new_ud
+            self.uq_set         = new_uq
+            self.Vmod_set       = new_Vmod
+            self.Vcap_set       = new_Vcap
+
+            self.L_set          = new_L
+            self.Vlim_set       = new_Vlim
+            self.Iflux_set      = new_Iflux
+            self.Iqmax_set      = new_Iqmax
+
+            self.motorTemp_set  = new_motorTemp
+            self.Ibatt_set      = new_Ibatt
+            self.Tdmd_set       = new_Tdmd
+
+            self.Vtgt_set       = new_Vtgt
+            self.Idq_set        = new_Idq
+            self.acc_set        = new_acc
+            self.gpsPos_set     = new_gpsPos
+            self.gpsVec_set     = new_gpsVec
+        else:
+            self.source_set     = np.concatenate((self.source_set, new_source),axis=1)
+            self.CAN_set        = np.concatenate((self.CAN_set, new_CAN),axis=1)
+            self.key_set        = np.concatenate((self.key_set, new_key),axis=1)
+            self.torqueAct_set  = np.concatenate((self.torqueAct_set, new_torqueAct),axis=1)
+            self.currAct_set    = np.concatenate((self.currAct_set, new_currAct),axis=1)
+            self.vel_set        = np.concatenate((self.vel_set, new_vel),axis=1)
+
+            self.ud_set         = np.concatenate((self.ud_set, new_ud),axis=1)
+            self.uq_set         = np.concatenate((self.uq_set, new_uq),axis=1)
+            self.Vmod_set       = np.concatenate((self.Vmod_set, new_Vmod),axis=1)
+            self.Vcap_set       = np.concatenate((self.Vcap_set, new_Vcap),axis=1)
+
+            self.L_set          = np.concatenate((self.L_set, new_L),axis=1)
+            self.Vlim_set       = np.concatenate((self.Vlim_set, new_Vlim),axis=1)
+            self.Iflux_set      = np.concatenate((self.Iflux_set, new_Iflux),axis=1)
+            self.Iqmax_set      = np.concatenate((self.Iqmax_set, new_Iqmax),axis=1)
+
+            self.motorTemp_set  = np.concatenate((self.motorTemp_set, new_motorTemp),axis=1)
+            self.Ibatt_set      = np.concatenate((self.Ibatt_set, new_Ibatt),axis=1)
+            self.Tdmd_set       = np.concatenate((self.Tdmd_set, new_Tdmd),axis=1)
+
+            self.Vtgt_set       = np.concatenate((self.Vtgt_set, new_Vtgt),axis=1)
+            self.Idq_set        = np.concatenate((self.Idq_set, new_Idq),axis=1)
+            self.acc_set        = np.concatenate((self.acc_set, new_acc),axis=1)
+            self.gpsPos_set     = np.concatenate((self.gpsPos_set, new_gpsPos),axis=1)
+            self.gpsVec_set     = np.concatenate((self.gpsVec_set, new_gpsVec),axis=1)
 
 
 # file select
@@ -64,130 +144,13 @@ def setfilename(fnametmp):
     return os.path.join(log_dir, fnametmp)
 
 
-# uncomment file you want to analize
-
-# 2차 사전테스트
-# fname = setfilename('2025-08-29 08-56-47.log'); flg_cnti = 0; # Laps: 0/0/0, Remarks: 가속/제동
-# fname = setfilename('2025-08-29 09-01-23.log'); flg_cnti = 0; # Laps: 0/0/0, Remarks: 동적 성능 1
-# fname = setfilename('2025-08-29 09-04-01.log'); flg_cnti = 1; # Laps: 0/0/0, Remarks: 동적 성능 1(이어짐)
-# fname = setfilename('2025-08-29 09-05-08.log'); flg_cnti = 1; # Laps: 0/0/0, Remarks: 동적 성능 1(이어짐)
-fname = setfilename('log/2025-08-29 09-09-27.log'); flg_cnti = 0; # Laps: 0/0/0, Remarks: 동적 성능 2
-# fname = setfilename('2025-08-29 09-11-42.log'); flg_cnti = 1; # Laps: 0/0/0, Remarks: 동적 성능 2(이어짐)
-# fname = setfilename('.log') % Laps: 0/0/0, Remarks:
-
-
-# code
-# count line:
-print("\nINFO: entering size search loop... ")
-cnt_tot_sub = 0 #count total 몇 줄인지
-try:
-    with open(fname, 'rb') as fid:
-        while True:
-            read_tmp1 = fid.read(8) #8 bytes 읽기
-            
-            if not read_tmp1: #비어있는 경우 false. 따라서 read_tmp1(현재 읽고 있는 줄)이 비어있다면 중단한다는 의미
-                break
-            
-            read_tmp2 = fid.read(8) 
-
-            cnt_tot_sub += 1
-
-    print("INFO: size search loop finished. ")
-
-except FileNotFoundError:
-    print(f"Error: File {fname} not found.")
-
-# set offset :
-
-if( flg_cnti != 1 ):
-    timestamp_offset = 0
-
-    source_set = np.full((1, cnt_tot_sub), np.nan)
-    cnt_source = 1
-    
-    CAN_set = np.full((8, cnt_tot_sub), np.nan)
-    cnt_CAN = 1
-    
-    key_set = np.full((1, cnt_tot_sub), np.nan)
-    cnt_key = 1
-    
-    
-    # 물리량별 저장 공간 선언
-    torqueAct_set   = np.full((2, cnt_tot_sub), np.nan); cnt_torqueAct = 1
-    currAct_set     = np.full((2, cnt_tot_sub), np.nan); cnt_currAct = 1
-    vel_set         = np.full((2, cnt_tot_sub), np.nan); cnt_vel = 1
-    
-    ud_set          = np.full((2, cnt_tot_sub), np.nan); cnt_ud = 1
-    uq_set          = np.full((2, cnt_tot_sub), np.nan); cnt_uq = 1
-    Vmod_set        = np.full((2, cnt_tot_sub), np.nan); cnt_Vmod = 1
-    Vcap_set        = np.full((2, cnt_tot_sub), np.nan); cnt_Vcap = 1
-    
-    L_set           = np.full((2, cnt_tot_sub), np.nan); cnt_L = 1
-    Vlim_set        = np.full((2, cnt_tot_sub), np.nan); cnt_Vlim = 1
-    Iflux_set       = np.full((2, cnt_tot_sub), np.nan); cnt_Iflux = 1
-    Iqmax_set       = np.full((2, cnt_tot_sub), np.nan); cnt_Iqmax = 1
-    
-    motorTemp_set   = np.full((2, cnt_tot_sub), np.nan); cnt_motorTemp = 1
-    Ibatt_set       = np.full((2, cnt_tot_sub), np.nan); cnt_Ibatt = 1
-    Tdmd_set        = np.full((2, cnt_tot_sub), np.nan); cnt_Tdmd = 1
-    
-    Vtgt_set        = np.full((2, cnt_tot_sub), np.nan); cnt_Vtgt = 1
-    Idq_set        = np.full((3, cnt_tot_sub), np.nan); cnt_Idq = 1
-    
-    
-    acc_set = np.full((4, cnt_tot_sub), np.nan)
-    cnt_acc = 1
-    
-    gpsPos_set = np.full((3, cnt_tot_sub), np.nan)
-    cnt_gpsPos = 1
-    
-    gpsVec_set = np.full((3, cnt_tot_sub), np.nan)
-    cnt_gpsVec = 1
-
-else :
-    # timestamp_offset = timestamp_mem
-
-    source_set = [source_set, np.full((1, cnt_tot_sub), np.nan)]
-    CAN_set    = [CAN_set, np.full((8, cnt_tot_sub), np.nan)]
-    key_set    = [key_set, np.full((1, cnt_tot_sub), np.nan)]
-
-
-    # 물리량별 저장 공간 확장
-    torqueAct_set   = [torqueAct_set, np.full((2, cnt_tot_sub), np.nan)]
-    currAct_set     = [currAct_set, np.full((2, cnt_tot_sub), np.nan)]
-    vel_set         = [vel_set, np.full((2, cnt_tot_sub), np.nan)]
-
-    ud_set          = [ud_set, np.full((2, cnt_tot_sub), np.nan)]
-    uq_set          = [uq_set, np.full((2, cnt_tot_sub), np.nan)]
-    Vmod_set        = [Vmod_set, np.full((2, cnt_tot_sub), np.nan)]
-    Vcap_set        = [Vcap_set, np.full((2, cnt_tot_sub), np.nan)]
-
-    L_set           = [L_set, np.full((2, cnt_tot_sub), np.nan)]
-    Vlim_set        = [Vlim_set, np.full((2, cnt_tot_sub), np.nan)]
-    Iflux_set       = [Iflux_set, np.full((2, cnt_tot_sub), np.nan)]
-    Iqmax_set       = [Iqmax_set, np.full((2, cnt_tot_sub), np.nan)]
-
-    motorTemp_set   = [motorTemp_set, np.full((2, cnt_tot_sub), np.nan)]
-    Ibatt_set       = [Ibatt_set, np.full((2, cnt_tot_sub), np.nan)]
-    Tdmd_set        = [Tdmd_set, np.full((2, cnt_tot_sub), np.nan)]
-
-    Vtgt_set        = [Vtgt_set, np.full((2, cnt_tot_sub), np.nan)]
-    Idq_set         = [Idq_set, np.full((3, cnt_tot_sub), np.nan)]
-
-
-    acc_set         = [acc_set, np.full((4, cnt_tot_sub), np.nan)]
-    gpsPos_set      = [gpsPos_set, np.full((3, cnt_tot_sub), np.nan)]
-    gpsVec_set      = [gpsVec_set, np.full((3, cnt_tot_sub), np.nan)]
-
 #---------------test---------------
 
 if __name__ == "__main__":
-    print("\ntestcode :")
-    print(f"cnt_tot_sub:{cnt_tot_sub}")
+    testsett=VehicleLog()
 
 
-def djkajfkdsjflsj():
-    """this function to show docstring
-    this is poop"""
-
-print(djkajfkdsjflsj.__doc__)
+    def exfunc():
+        """this function to show docstring
+        this is poop"""
+    print(exfunc.__doc__)
