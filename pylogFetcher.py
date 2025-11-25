@@ -186,7 +186,7 @@ class VehicleLog:
                 chk   = self._read_val(fid, '<B', 1) # checksum
 
 
-                print(f"src: {src}, key: {key}, cnt: {self.cnt_source}")
+                # print(f"src: {src}, key: {key}, cnt: {self.cnt_source}")
 
                 # 공통 데이터 저장
                 if self.cnt_source < self.source_set.shape[1]:
