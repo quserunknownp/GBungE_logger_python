@@ -56,14 +56,28 @@ for idx, fname in enumerate(file_list):
 
 
 if __name__ == "__main__":    
-
+    # uncomment plot you want to view.
+    
     visualizer = LogVisualizer(log_data)
     
-    print("Graph 1: 토크 응답성 확인")
-    visualizer.plot_torque_performance()
+    # print("Graph 1: 토크 응답성 확인")
+    # visualizer.plot_torque_performance()
     
-    print("Graph 2: 벡터 제어(Id/Iq) 상태 확인")
-    visualizer.plot_vector_control()
+    # print("Graph 2: 벡터 제어(Id/Iq) 상태 확인")
+    # visualizer.plot_vector_control()
 
-    print("Graph 3: 약계자 제어")
-    visualizer.plot_field_weakening()
+    # print("Graph 3: 약계자 제어")
+    # visualizer.plot_field_weakening()
+
+    # print("gps 속도 slip ratio")
+    # visualizer.plot_gps_velocity_and_slip()
+
+    # visualizer.plot_torque_vs_rpm()
+
+    # visualizer.plot_temperature_profile()
+
+    # visualizer.plot_torque_vs_temperature()
+
+    # visualizer.plot_current_vs_torque_efficiency()
+
+    visualizer.plot_current_efficiency()
