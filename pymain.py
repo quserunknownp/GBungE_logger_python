@@ -57,8 +57,10 @@ for idx, fname in enumerate(file_list):
 
 if __name__ == "__main__":    
     # uncomment plot you want to view.
-    
+
     visualizer = LogVisualizer(log_data)
+    
+    # visualizer.plot_gps_only()
     
     # print("Graph 1: 토크 응답성 확인")
     # visualizer.plot_torque_performance()
@@ -80,4 +82,18 @@ if __name__ == "__main__":
 
     # visualizer.plot_current_vs_torque_efficiency()
 
-    visualizer.plot_current_efficiency()
+    # visualizer.plot_current_efficiency()
+
+    # visualizer.plot_advanced_id_iq_analysis()
+
+    # visualizer.plot_vehicle_dynamics()
+
+    # visualizer.plot_vehicle_dynamics_lpf()
+    
+    # visualizer.plot_vehicle_dynamics_mv_avg()
+
+    # log_data.split_laps()
+
+    # visualizer.plot_gps_gforce_map()   
+
+    visualizer.plot_laps_slideshow()
