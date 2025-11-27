@@ -937,7 +937,7 @@ class LogVisualizer:
         [Interactive] 키보드 좌우 방향키로 랩을 넘겨보는 기능
         """
         # 1. 랩 분할
-        laps = self.data.split_laps(start_radius_m=20, min_lap_time_sec=30)
+        laps = self.data.split_laps(start_radius_m=20, min_lap_time_sec=60)
         if not laps:
             print("감지된 랩이 없습니다.")
             return
@@ -1047,3 +1047,947 @@ class LogVisualizer:
         plt.figtext(0.5, 0.05, "Use [Left] / [Right] Arrow Keys to Switch Laps", 
                     ha="center", fontsize=14, color='blue')
         plt.show()
+
+    def plot_power_and_temp(self):  
+        """
+        [냉각 성능 분석용] 입력 전력(P = V*I)과 모터 온도 비교 그래프
+        """
+        # 1. 데이터 확인
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            print("전압, 전류 또는 온도 데이터가 없습니다.")
+            return
+
+        # 2. 데이터 추출
+        # 전압 (DC Link Voltage)
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        
+        # 전류 (Battery Current)
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        
+        # 온도 (Motor Temp)
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        # 3. 데이터 동기화 (시간축 통일)
+        # 전압 시간축(t_v)을 기준으로 나머지 데이터를 인터폴레이션
+        i_batt_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+
+        # 4. 전력(Power) 및 발열량(Heat Loss) 계산
+        # 입력 전력 (P_in) = V * I  (단위: kW)
+        power_kw = (v_cap * i_batt_sync) / 1000.0
+        
+        # 예상 발열량 (P_loss) 추정
+        # 모터 효율을 약 90%로 가정하면, 나머지 10%가 열로 바뀜
+        efficiency = 0.90 
+        heat_loss_kw = power_kw * (1 - efficiency)
+
+        # 5. 그래프 그리기 (이중축)
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+
+        # [Left Axis] 전력 (입력 파워 & 예상 발열량)
+        color = 'tab:blue'
+        ax1.set_xlabel('Time (sec)')
+        ax1.set_ylabel('Input Power (kW)', color=color)
+        
+        # 입력 전력 (투명하게 배경에 깔기)
+        ax1.fill_between(t_v, 0, power_kw, color=color, alpha=0.2, label='Input Power (Elec)')
+        
+        # 예상 발열량 (실선)
+        # ax1.plot(t_v, heat_loss_kw, color='navy', linewidth=1, linestyle='--', label='Est. Heat Loss (10%)')
+        
+        ax1.tick_params(axis='y', labelcolor=color)
+        ax1.set_ylim(0, max(power_kw)*1.2) # 여유 있게
+
+        # [Right Axis] 온도
+        ax2 = ax1.twinx()  
+        color = 'tab:red'
+        ax2.set_ylabel('Motor Temperature (°C)', color=color)
+        
+        # 온도 그래프 (굵게)
+        ax2.plot(t_v, temp_sync, color=color, linewidth=2.5, label='Motor Temp')
+        
+        # 위험 온도 라인
+        ax2.axhline(115, color='orange', linestyle='--', label='Overheat (115°C)')
+        
+        ax2.tick_params(axis='y', labelcolor=color)
+        ax2.set_ylim(20, 140) # 온도 범위 고정
+
+        # 제목 및 범례
+        plt.title('Thermal Load Analysis: Power Input vs Temperature Rise')
+        fig.tight_layout()
+        plt.show()
+
+    def analyze_moving_rms(self, window_sec=30):
+        """
+        [고급 전력 분석] 30초 이동 RMS (Moving RMS) 그래프
+        - 순간적인 피크가 아니라, '지속적인 열부하'가 가장 심했던 구간을 찾음
+        """
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None:
+            return
+
+        # 1. 데이터 추출 및 청소
+        t_v_raw = self.data.Vcap_set[0, :]
+        v_cap_raw = self.data.Vcap_set[1, :]
+        t_i_raw = self.data.Ibatt_set[0, :]
+        i_batt_raw = self.data.Ibatt_set[1, :]
+
+        # NaN 제거
+        mask_v = ~np.isnan(t_v_raw) & ~np.isnan(v_cap_raw)
+        t_v = t_v_raw[mask_v]
+        v_cap = v_cap_raw[mask_v]
+
+        mask_i = ~np.isnan(t_i_raw) & ~np.isnan(i_batt_raw)
+        t_i = t_i_raw[mask_i]
+        i_batt = i_batt_raw[mask_i]
+
+        if len(t_v) == 0: return
+
+        # 2. 데이터 동기화 & 순간 전력 계산
+        i_sync = np.interp(t_v, t_i, i_batt)
+        p_inst = (v_cap * i_sync) / 1000.0 # kW
+
+        # 3. 30초 윈도우 크기 계산
+        # 샘플링 주파수(fs) 추정
+        if len(t_v) > 1:
+            fs = 1.0 / np.mean(np.diff(t_v))
+        else:
+            fs = 10.0 # 기본값
+            
+        window_size = int(window_sec * fs)
+        if window_size < 1: window_size = 1
+        
+        print(f"INFO: Calculating {window_sec}s Moving RMS (Window: {window_size} samples)")
+
+        # 4. 이동 RMS 계산 함수
+        def calculate_moving_rms(data, w):
+            # RMS = sqrt( Mean( Square(Data) ) )
+            squared = data ** 2
+            # 이동 평균 (Convolution 사용)
+            moving_avg_sq = np.convolve(squared, np.ones(w)/w, mode='same')
+            # 루트
+            return np.sqrt(moving_avg_sq)
+
+        # 전력(Power) RMS & 전류(Current) RMS 계산
+        p_moving_rms = calculate_moving_rms(p_inst, window_size)
+        i_moving_rms = calculate_moving_rms(i_sync, window_size)
+
+        # 5. 최대 부하 지점 찾기 (Worst Case)
+        max_idx = np.argmax(p_moving_rms)
+        max_p_rms = p_moving_rms[max_idx]
+        max_i_rms = i_moving_rms[max_idx]
+        peak_time = t_v[max_idx]
+
+        # 6. 그래프 그리기
+        fig, ax1 = plt.subplots(figsize=(12, 7))
+
+        # [Left Axis] 전력 (Power)
+        color = 'tab:blue'
+        ax1.set_xlabel('Time (sec)')
+        ax1.set_ylabel('Power (kW)', color=color)
+        
+        # 배경: 순간 전력 (흐리게)
+        ax1.plot(t_v, p_inst, color='skyblue', alpha=0.3, linewidth=1, label='Instantaneous Power')
+        
+        # 전경: 30초 이동 RMS (진하게) -> 이게 진짜 열부하!
+        ax1.plot(t_v, p_moving_rms, color='blue', linewidth=2.5, label=f'{window_sec}s Moving RMS Power')
+        
+        ax1.tick_params(axis='y', labelcolor=color)
+        ax1.legend(loc='upper left')
+        ax1.grid(True)
+
+        # [Right Axis] 전류 (Current) - 발열의 핵심
+        ax2 = ax1.twinx()
+        color = 'tab:red'
+        ax2.set_ylabel('RMS Current (A)', color=color)
+        
+        # 30초 이동 RMS 전류
+        ax2.plot(t_v, i_moving_rms, color=color, linestyle='--', linewidth=2, label=f'{window_sec}s Moving RMS Current')
+        ax2.tick_params(axis='y', labelcolor=color)
+        ax2.legend(loc='upper right')
+
+        # 최대 부하 지점 표시
+        ax1.axvline(peak_time, color='green', linestyle=':', linewidth=2)
+        plt.title(f'Thermal Load Analysis: {window_sec}s Moving RMS')
+        
+        # 텍스트 박스 (결과 요약)
+        text_str = (f"Worst {window_sec}s Load:\n"
+                    f"Power: {max_p_rms:.1f} kW\n"
+                    f"Current: {max_i_rms:.1f} A")
+        
+        # 그래프 상단에 박스 표시
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        ax1.text(0.02, 0.95, text_str, transform=ax1.transAxes, fontsize=12,
+                verticalalignment='top', bbox=props)
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_temp_rise_vs_power(self):
+        """
+        [냉각 성능 상관관계 분석]
+        X축: 온도 상승률 (degC / 10sec)
+        Y축: 소비 전력 (kW)
+        - 이 그래프의 기울기나 절편을 통해 냉각 시스템의 한계를 파악할 수 있습니다.
+        """
+        # 1. 데이터 확인
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            print("전압, 전류 또는 온도 데이터가 없습니다.")
+            return
+
+        # 2. 데이터 추출 및 동기화
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        # 시간축 통일 (전압 기준)
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+
+        # NaN 제거
+        mask = ~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)
+        t_v = t_v[mask]
+        v_cap = v_cap[mask]
+        i_sync = i_sync[mask]
+        temp_sync = temp_sync[mask]
+
+        if len(t_v) == 0: return
+
+        # 3. 데이터 가공 (핵심 로직)
+        
+        # (1) 소비 전력 (kW)
+        power_kw = (v_cap * i_sync) / 1000.0
+        
+        # (2) 10초 간격 온도 상승률 계산 (Delta T / 10s)
+        # 샘플링 주파수(fs) 계산
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_10s = int(10 * fs) # 10초에 해당하는 데이터 개수
+        
+        if window_10s < 1: window_10s = 1
+
+        # 온도 변화율 계산 (현재 온도 - 10초 전 온도)
+        # np.roll을 사용하여 배열을 시프트한 뒤 뺄셈
+        temp_prev = np.roll(temp_sync, window_10s)
+        temp_rise_10s = temp_sync - temp_prev
+        
+        # 앞부분 10초 데이터는 유효하지 않으므로 마스킹 처리
+        valid_idx = slice(window_10s, None)
+        
+        # (3) 해당 10초 동안의 평균 전력 계산 (반응 지연 고려)
+        # 온도가 오르는 건 '지난 10초간 쓴 전력' 때문이므로, 전력도 이동평균을 내줍니다.
+        power_smooth = np.convolve(power_kw, np.ones(window_10s)/window_10s, mode='full')
+        # convolve 결과 크기가 달라지므로 원본 길이에 맞춤 (앞부분 잘라냄)
+        power_smooth = power_smooth[:len(power_kw)]
+
+        # 유효 데이터만 추출
+        x_data = temp_rise_10s[valid_idx] # 온도 상승률
+        y_data = power_smooth[valid_idx]  # 평균 전력
+
+        # 4. 그래프 그리기
+        plt.figure(figsize=(10, 8))
+        
+        # 산점도 (Scatter) - 밀도 표현을 위해 투명도(alpha) 사용
+        # 색상(c)을 온도(temp_sync)로 주어, 고온일 때의 거동을 구분
+        sc = plt.scatter(x_data, y_data, c=temp_sync[valid_idx], cmap='inferno', 
+                         s=10, alpha=0.5)
+        
+        # 기준선 (X=0, 온도 변화 없음 = 열 평형 상태)
+        plt.axvline(0, color='k', linestyle='--', linewidth=1, label='Thermal Equilibrium (dT=0)')
+        
+        # 꾸미기
+        cbar = plt.colorbar(sc)
+        cbar.set_label('Current Motor Temp (°C)')
+        
+        plt.title('Correlation: Power Input vs Temperature Rise (10s window)')
+        plt.xlabel('Temperature Rise per 10 sec (°C / 10s)')
+        plt.ylabel('Average Input Power (kW)')
+        plt.grid(True)
+        plt.legend()
+
+        # [분석 팁] 텍스트 표시
+        # X > 0 (오른쪽): 온도가 오르고 있음 (발열 > 냉각)
+        # X < 0 (왼쪽): 온도가 식고 있음 (발열 < 냉각)
+        plt.text(max(x_data)*0.7, max(y_data)*0.9, "Heating Up ->", color='red', fontweight='bold')
+        plt.text(min(x_data)*0.7, max(y_data)*0.9, "<- Cooling Down", color='blue', fontweight='bold')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_temp_slope_trend(self, window_sec=45.0):
+        """
+        [정밀 냉각 분석] Rolling Linear Regression (선형 회귀 기울기)
+        X축: 온도 상승 기울기 (degC/sec) -> 추세선의 Slope
+        Y축: 해당 구간 평균 소비 전력 (kW)
+        """
+        # 1. 데이터 확인
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 2. 데이터 동기화 (전압 시간축 기준)
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+
+        # NaN 제거
+        mask = ~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)
+        t_v = t_v[mask]
+        v_cap = v_cap[mask]
+        i_sync = i_sync[mask]
+        temp_sync = temp_sync[mask]
+        
+        if len(t_v) == 0: return
+
+        # 전력 계산 (kW)
+        power_kw = (v_cap * i_sync) / 1000.0
+
+        # 3. 슬라이딩 윈도우 & 선형 회귀 (핵심 로직)
+        # 샘플링 주파수
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        
+        if window_len < 2: window_len = 2
+        
+        slopes = []
+        avg_powers = []
+        avg_temps = []
+        
+        # 데이터를 window_len 만큼씩 잘라서 분석 (Step은 데이터 양에 따라 조절)
+        # 데이터가 많으면 step을 늘려서 속도를 높임 (예: 0.5초 단위 이동)
+        step = int(fs * 0.5) if int(fs * 0.5) > 1 else 1
+        
+        print(f"INFO: Calculating Slopes ({window_sec}s window)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            # 구간 데이터 추출
+            t_chunk = t_v[i : i + window_len]
+            temp_chunk = temp_sync[i : i + window_len]
+            power_chunk = power_kw[i : i + window_len]
+            
+            # [핵심] 1차 함수(선형) 피팅 -> 기울기(Slope) 추출
+            # deg=1 : y = ax + b 에서 a(기울기)를 구함
+            # 결과: slope (degC/sec)
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            slope = fit[0] 
+            
+            # 데이터 저장
+            slopes.append(slope)
+            avg_powers.append(np.mean(power_chunk))
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 배열 변환
+        slopes = np.array(slopes)
+        avg_powers = np.array(avg_powers)
+        avg_temps = np.array(avg_temps)
+
+        # 4. 그래프 그리기
+        plt.figure(figsize=(11, 9))
+        
+        # 산점도 (X: 기울기, Y: 전력, Color: 온도)
+        # 기울기를 보기 좋게 '10초당 변화량'으로 환산해서 보여줌 (* 10)
+        x_axis = slopes * 10.0 
+        
+        sc = plt.scatter(x_axis, avg_powers, c=avg_temps, cmap='magma', 
+                         s=15, alpha=0.6)
+        
+        # 기준선 (온도 변화 없음 = 열 평형)
+        plt.axvline(0, color='k', linestyle='--', linewidth=1.5, label='Equilibrium (Slope=0)')
+        
+        # 추세선 (데이터 전체의 경향성)
+        # X(기울기)와 Y(전력) 사이의 관계를 보여주는 선
+        if len(x_axis) > 1:
+            trend = np.polyfit(x_axis, avg_powers, 1)
+            trend_fn = np.poly1d(trend)
+            x_range = np.linspace(min(x_axis), max(x_axis), 100)
+            plt.plot(x_range, trend_fn(x_range), 'b:', linewidth=2, label='Trend Line')
+
+        # 꾸미기
+        cbar = plt.colorbar(sc)
+        cbar.set_label('Motor Temperature (°C)')
+        
+        plt.title(f'Cooling Performance: Power vs Temp Slope ({window_sec}s Regression)')
+        plt.xlabel('Temperature Slope (°C / 10sec)')
+        plt.ylabel('Average Input Power (kW)')
+        plt.grid(True)
+        plt.legend()
+        
+        # [분석 팁] 텍스트
+        plt.text(max(x_axis)*0.6, max(avg_powers)*0.1, "Heating (Insufficient Cooling)", color='red')
+        plt.text(min(x_axis)*0.6, max(avg_powers)*0.1, "Cooling (Sufficient)", color='blue')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_thermal_path(self, window_sec=45.0, min_temp=60.0):
+        """
+        [Update] 특정 온도(예: 60도) 이상인 '주행 구간' 데이터만 분석
+        """
+        from matplotlib.collections import LineCollection
+
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        # 2. 동기화
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+
+        # 3. [핵심] 데이터 필터링 (60도 이상 & NaN 제거)
+        # 피트인(저온) 구간을 날려버립니다.
+        mask = (~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)) & \
+               (temp_sync >= min_temp)
+        
+        t_v = t_v[mask]
+        v_cap = v_cap[mask]
+        i_sync = i_sync[mask]
+        temp_sync = temp_sync[mask]
+        
+        if len(t_v) == 0:
+            print(f"조건을 만족하는 데이터가 없습니다. (Min Temp: {min_temp}°C)")
+            return
+
+        power_kw = (v_cap * i_sync) / 1000.0
+
+        # 4. 슬라이딩 윈도우 & 선형 회귀
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        
+        step = max(1, int(fs * 0.5)) 
+
+        slopes = []
+        avg_powers = []
+        avg_temps = []
+
+        print(f"INFO: Analyzing Active Driving Data (Temp >= {min_temp}°C)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            t_chunk = t_v[i : i + window_len]
+            
+            # [중요] 데이터가 시간적으로 연속적인지 체크 (피트인 구간 건너뜀 방지)
+            # 데이터 간격이 너무 벌어지면(예: 5초 이상) 회귀 계산에서 제외
+            if t_chunk[-1] - t_chunk[0] > window_sec * 2: 
+                continue
+
+            temp_chunk = temp_sync[i : i + window_len]
+            power_chunk = power_kw[i : i + window_len]
+            
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            
+            slopes.append(fit[0] * 10.0) # 10초당 변화율
+            avg_powers.append(np.mean(power_chunk))
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 5. 선 그리기
+        x = np.array(slopes)
+        y = np.array(avg_powers)
+        z = np.array(avg_temps)
+
+        points = np.array([x, y]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+
+        norm = plt.Normalize(z.min(), z.max())
+        lc = LineCollection(segments, cmap='magma', norm=norm)
+        lc.set_array(z)
+        lc.set_linewidth(2)
+        lc.set_alpha(0.8)
+
+        line = ax.add_collection(lc)
+        
+        ax.set_xlim(x.min()-0.5, x.max()+0.5)
+        ax.set_ylim(y.min()-1, y.max()+1)
+
+        # 기준선
+        ax.axvline(0, color='k', linestyle='--', linewidth=1.5, label='Equilibrium (Slope=0)')
+        
+        # 추세선 (Trend Line) - 60도 이상 데이터만의 경향성
+        if len(x) > 1:
+            trend = np.polyfit(x, y, 1)
+            
+            # 파란 점선 -> 빨간 실선으로 변경 (강조)
+            x_range = np.linspace(x.min(), x.max(), 100)
+            y_trend = np.poly1d(trend)(x_range)
+            
+            ax.plot(x_range, y_trend, 'b:', linewidth=3, label=f'Active Trend (>{min_temp}°C)')
+            
+            # Y절편(냉각 한계) 표시
+            y_intercept = np.poly1d(trend)(0)
+            ax.plot(0, y_intercept, 'rx', markersize=12, markeredgewidth=3)
+            ax.text(0.1, y_intercept, f' Limit: {y_intercept:.1f}kW', color='red', fontweight='bold', fontsize=12)
+
+        cbar = fig.colorbar(line, ax=ax)
+        cbar.set_label('Motor Temperature (°C)')
+        
+        ax.set_title(f'Active Thermal Performance (Temp >= {min_temp}°C)')
+        ax.set_xlabel('Temperature Slope (°C / 10sec)')
+        ax.set_ylabel('Average Input Power (kW)')
+        ax.grid(True)
+        ax.legend(loc='upper left')
+
+        plt.tight_layout
+        plt.show()
+
+    def plot_thermal_path_v2(self, window_sec=15.0, min_power_kw=2.5):
+        """
+        [Update v2] 전력(Power) 기반 필터링 적용
+        - 2.5kW 미만 데이터(피트인, 탄력주행) 제거
+        - 순수 '부하 주행 시'의 열적 특성만 분석
+        """
+        from matplotlib.collections import LineCollection
+
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        # 2. 동기화
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+
+        # [중요] 필터링 전에 '전력'을 먼저 계산해야 함
+        # (NaN이 포함되어 있어도 계산 후 마스킹으로 처리)
+        power_kw_raw = (v_cap * i_sync) / 1000.0
+
+        # 3. [핵심] 데이터 필터링 (Power >= 2.5kW & NaN 제거)
+        # 피트인/대기 구간(2.5kW 미만) 삭제
+        mask = (~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)) & \
+               (power_kw_raw >= min_power_kw)
+        
+        t_v = t_v[mask]
+        v_cap = v_cap[mask]
+        i_sync = i_sync[mask]
+        temp_sync = temp_sync[mask]
+        power_kw = power_kw_raw[mask]
+        
+        if len(t_v) < 10:
+            print(f"조건을 만족하는 데이터가 너무 적습니다. (Min Power: {min_power_kw}kW)")
+            return
+
+        # 4. 슬라이딩 윈도우 & 선형 회귀
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        
+        step = max(1, int(fs * 0.5)) 
+
+        slopes = []
+        avg_powers = []
+        avg_temps = []
+
+        print(f"INFO: Analyzing Active Load Data (Power >= {min_power_kw}kW)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            t_chunk = t_v[i : i + window_len]
+            
+            # 데이터 연속성 체크 (필터링으로 시간이 끊긴 구간 건너뛰기)
+            if t_chunk[-1] - t_chunk[0] > window_sec * 1.5: 
+                continue
+
+            temp_chunk = temp_sync[i : i + window_len]
+            power_chunk = power_kw[i : i + window_len]
+            
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            
+            slopes.append(fit[0] * 10.0) # 10초당 변화율
+            avg_powers.append(np.mean(power_chunk))
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 5. 선 그리기
+        x = np.array(slopes)
+        y = np.array(avg_powers)
+        z = np.array(avg_temps)
+
+        points = np.array([x, y]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+
+        norm = plt.Normalize(z.min(), z.max())
+        lc = LineCollection(segments, cmap='magma', norm=norm)
+        lc.set_array(z)
+        lc.set_linewidth(2)
+        lc.set_alpha(0.8)
+
+        line = ax.add_collection(lc)
+        
+        # 축 범위 설정 (잘린 데이터에 맞춰 자동 조절)
+        ax.set_xlim(x.min()-0.5, x.max()+0.5)
+        ax.set_ylim(min_power_kw, y.max()+1) # Y축 시작을 컷오프 지점으로
+
+        # 기준선
+        ax.axvline(0, color='k', linestyle='--', linewidth=1.5, label='Equilibrium (Slope=0)')
+        
+        # 추세선 (Trend Line)
+        if len(x) > 1:
+            trend = np.polyfit(x, y, 1)
+            
+            x_range = np.linspace(x.min(), x.max(), 100)
+            y_trend = np.poly1d(trend)(x_range)
+            
+            ax.plot(x_range, y_trend, 'b:', linewidth=3, label=f'High Load Trend (>{min_power_kw}kW)')
+            
+            # Y절편(냉각 한계) 표시
+            y_intercept = np.poly1d(trend)(0)
+            ax.plot(0, y_intercept, 'rx', markersize=12, markeredgewidth=3)
+            ax.text(0.1, y_intercept, f' Limit: {y_intercept:.1f}kW', color='red', fontweight='bold', fontsize=12)
+
+        cbar = fig.colorbar(line, ax=ax)
+        cbar.set_label('Motor Temperature (°C)')
+        
+        ax.set_title(f'Active Thermal Performance (Power >= {min_power_kw}kW)')
+        ax.set_xlabel(f'Temperature Slope (°C / 10sec) [Window: {window_sec}s]')
+        ax.set_ylabel('Average Input Power (kW)')
+        ax.grid(True)
+        ax.legend(loc='upper left')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_power_vs_temp_slope(self, window_sec=15.0, min_power_kw=2.5):
+        """
+        [Final Analysis] 입력 전력(VI) vs 온도 상승률
+        - X축: 온도 변화 기울기 (degC / 10s)
+        - Y축: 평균 입력 전력 (kW)
+        - Filter: 2.5kW 미만 저부하 구간 제외
+        """
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        # 2. 동기화 및 전력 계산
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+        
+        # 전력 계산 (kW)
+        power_kw_raw = (v_cap * i_sync) / 1000.0
+
+        # 3. 필터링 (2.5kW 이상 & NaN 제거)
+        mask = (~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)) & \
+               (power_kw_raw >= min_power_kw)
+        
+        t_v = t_v[mask]
+        temp_sync = temp_sync[mask]
+        power_kw = power_kw_raw[mask]
+        
+        if len(t_v) < 10:
+            print("조건을 만족하는 데이터가 부족합니다.")
+            return
+
+        # 4. 슬라이딩 윈도우 회귀
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        step = max(1, int(fs * 0.5))
+
+        slopes = []
+        avg_powers = []
+        avg_temps = []
+
+        print(f"INFO: Analyzing Power vs Slope (Window: {window_sec}s)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            # 데이터 끊김 방지
+            if t_v[i + window_len - 1] - t_v[i] > window_sec * 1.5:
+                continue
+
+            t_chunk = t_v[i : i + window_len]
+            temp_chunk = temp_sync[i : i + window_len]
+            power_chunk = power_kw[i : i + window_len]
+            
+            # 선형 회귀 (기울기 추출)
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            
+            slopes.append(fit[0] * 10.0) # 10초당 온도 변화
+            avg_powers.append(np.mean(power_chunk))
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 5. 그래프 그리기
+        x = np.array(slopes)
+        y = np.array(avg_powers)
+        c = np.array(avg_temps)
+
+        plt.figure(figsize=(12, 10))
+        
+        # 산점도
+        sc = plt.scatter(x, y, c=c, cmap='magma', s=20, alpha=0.6)
+        
+        # 기준선 (열 평형)
+        plt.axvline(0, color='k', linestyle='--', linewidth=1.5, label='Thermal Equilibrium')
+
+        # 추세선 (Trend Line)
+        if len(x) > 1:
+            trend = np.polyfit(x, y, 1)
+            x_range = np.linspace(x.min(), x.max(), 100)
+            y_trend = np.poly1d(trend)(x_range)
+            
+            plt.plot(x_range, y_trend, 'b:', linewidth=3, label='Cooling Performance Trend')
+            
+            # Y절편 (냉각 한계 전력)
+            limit_kw = np.poly1d(trend)(0)
+            
+            plt.plot(0, limit_kw, 'rx', markersize=15, markeredgewidth=3)
+            plt.text(0.2, limit_kw, f' Continuous Limit:\n {limit_kw:.1f} kW', 
+                     color='red', fontweight='bold', fontsize=14, verticalalignment='center')
+
+        cbar = plt.colorbar(sc)
+        cbar.set_label('Motor Temperature (°C)')
+        
+        plt.title(f'Cooling Capacity Analysis: Input Power vs Temp Slope\n(Filtered: Power >= {min_power_kw}kW)')
+        plt.xlabel('Temperature Rise Speed (°C / 10sec)')
+        plt.ylabel('Average Input Power (kW)')
+        plt.grid(True)
+        plt.legend(loc='upper left')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_cooling_trend_regression(self, window_sec=15.0, max_power_kw=1.0):
+        """
+        [순수 냉각 성능 정밀 분석]
+        - 조건: 전력 소모 1kW 미만 (거의 정차/탄력주행)
+        - X축: 현재 모터 온도 (°C)
+        - Y축: 온도 변화율 (°C / 10s) -> 식는 속도
+        - 추세선: 뉴턴의 냉각 법칙에 따른 냉각 계수(k) 추정
+        """
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+        power_kw = (v_cap * i_sync) / 1000.0
+
+        # 2. 필터링 (Power < 1kW & NaN 제거)
+        mask = (~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)) & \
+               (power_kw < max_power_kw)
+        
+        t_v = t_v[mask]
+        temp_sync = temp_sync[mask]
+        
+        if len(t_v) < 10:
+            print("냉각 분석을 위한 저부하 데이터가 부족합니다.")
+            return
+
+        # 3. 슬라이딩 윈도우 & 기울기 계산
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        step = max(1, int(fs * 0.5))
+
+        slopes = []     # Y축: 식는 속도
+        avg_temps = []  # X축: 현재 온도
+
+        print(f"INFO: Analyzing Cooling Trend (Power < {max_power_kw}kW)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            if t_v[i + window_len - 1] - t_v[i] > window_sec * 1.5:
+                continue
+
+            t_chunk = t_v[i : i + window_len]
+            temp_chunk = temp_sync[i : i + window_len]
+            
+            # 선형 회귀로 '순간 기울기' 추출
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            
+            slopes.append(fit[0] * 10.0) # 10초당 변화율
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 4. 그래프 그리기
+        x = np.array(avg_temps) # 온도
+        y = np.array(slopes)    # 속도
+
+        plt.figure(figsize=(11, 9))
+        
+        # 산점도
+        plt.scatter(x, y, c='blue', s=15, alpha=0.3, label='Cooling Data Points')
+        
+        # 기준선 (0 = 변화 없음)
+        plt.axhline(0, color='k', linestyle='--', linewidth=1.5, label='Zero Change')
+
+        # --- [핵심] 추세선 (Trend Line) 그리기 ---
+        if len(x) > 1:
+            # 1차 함수 피팅 (y = ax + b)
+            # a (기울기)가 가파를수록 고온에서 냉각 효율이 좋다는 뜻
+            trend = np.polyfit(x, y, 1)
+            trend_fn = np.poly1d(trend)
+            
+            x_range = np.linspace(x.min(), x.max(), 100)
+            
+            # 파란색 점선으로 추세선 표시
+            plt.plot(x_range, trend_fn(x_range), 'r:', linewidth=3, label='Cooling Performance Trend')
+            
+            # 성능 지표 (기울기) 텍스트 표시
+            cooling_coeff = trend[0]
+            # y값(속도)이 음수이므로, 기울기가 음수여야 정상 (온도가 높을수록 더 빨리 식음 -> y가 더 작아짐)
+            
+            plt.text(x.min(), trend_fn(x.min()), 
+                     f' Cooling Coefficient: {cooling_coeff:.3f}\n (Steeper is Better)', 
+                     color='red', fontweight='bold', fontsize=12, verticalalignment='bottom')
+
+        plt.title(f'Passive Cooling Performance: Temp vs Cooling Rate\n(Filtered: Power < {max_power_kw}kW)')
+        plt.xlabel('Current Motor Temperature (°C)')
+        plt.ylabel('Cooling Speed (°C / 10sec)')
+        plt.grid(True)
+        plt.legend()
+        
+        # Y축 반전 (아래로 내려갈수록 빨리 식는 것이므로 직관적으로 보이게)
+        # 만약 헷갈리면 이 줄을 주석 처리하세요.
+        # plt.gca().invert_yaxis() 
+
+        plt.tight_layout()
+        plt.show()        
+
+    def plot_cooling_intercept(self, window_sec=15.0, max_power_kw=1.0):
+        """
+        [순수 냉각 구간 분석] Power vs Temp Slope (Low Power Only)
+        - 조건: 전력 < 1kW (정차/탄력주행)
+        - 목적: Y=0(전력 0)일 때의 X절편(냉각 속도) 확인
+        """
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출 및 동기화
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+        power_kw_raw = (v_cap * i_sync) / 1000.0
+
+        # 2. [핵심] 1kW 이상 데이터 제외 (High Power Filter Out)
+        mask = (~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)) & \
+               (power_kw_raw < max_power_kw)
+        
+        t_v = t_v[mask]
+        temp_sync = temp_sync[mask]
+        power_kw = power_kw_raw[mask]
+        
+        if len(t_v) < 10:
+            print(f"조건을 만족하는 저부하 데이터가 부족합니다. (Max Power: {max_power_kw}kW)")
+            return
+
+        # 3. 슬라이딩 윈도우 회귀
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        step = max(1, int(fs * 0.5))
+
+        slopes = []
+        avg_powers = []
+        avg_temps = []
+
+        print(f"INFO: Analyzing Cooling Intercept (Power < {max_power_kw}kW)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            if t_v[i + window_len - 1] - t_v[i] > window_sec * 1.5:
+                continue
+
+            t_chunk = t_v[i : i + window_len]
+            temp_chunk = temp_sync[i : i + window_len]
+            power_chunk = power_kw[i : i + window_len]
+            
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            
+            slopes.append(fit[0] * 10.0) # 10초당 변화율
+            avg_powers.append(np.mean(power_chunk))
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 4. 그래프 그리기
+        x = np.array(slopes)
+        y = np.array(avg_powers)
+        c = np.array(avg_temps)
+
+        plt.figure(figsize=(12, 10))
+        
+        # 산점도 (Cooling Zone)
+        sc = plt.scatter(x, y, c=c, cmap='cool', s=20, alpha=0.5)
+        
+        # 기준선
+        plt.axvline(0, color='k', linestyle='--', linewidth=1, label='Zero Change')
+        plt.axhline(0, color='k', linestyle='-', linewidth=1) # Y=0 바닥선
+
+        # 추세선 및 X절편 계산
+        if len(x) > 1:
+            trend = np.polyfit(x, y, 1) # y = ax + b
+            
+            # X절편 구하기 (y=0일 때 x값) => x = -b / a
+            slope_a, intercept_b = trend
+            if slope_a != 0:
+                x_intercept = -intercept_b / slope_a
+            else:
+                x_intercept = 0
+            
+            # 추세선 그리기
+            x_range = np.linspace(min(x.min(), x_intercept-0.5), max(x.max(), 0.5), 100)
+            plt.plot(x_range, np.poly1d(trend)(x_range), 'b--', linewidth=2, label='Cooling Trend')
+            
+            # X절편 표시 (Natural Cooling Rate)
+            plt.plot(x_intercept, 0, 'bx', markersize=15, markeredgewidth=3)
+            plt.text(x_intercept, 0.1, f' Natural Cooling:\n {x_intercept:.2f} °C/10s', 
+                     color='blue', fontweight='bold', fontsize=12, horizontalalignment='center')
+
+        cbar = plt.colorbar(sc)
+        cbar.set_label('Motor Temperature (°C)')
+        
+        plt.title(f'Natural Cooling Analysis: Power vs Temp Slope\n(Filtered: Power < {max_power_kw}kW)')
+        plt.xlabel('Temperature Drop Speed (°C / 10sec)')
+        plt.ylabel('Average Input Power (kW)')
+        plt.grid(True)
+        plt.legend(loc='upper right')
+        
+        # X축을 반전시키지 않고 그대로 둡니다 (음수 = 식음)
+        # 왼쪽으로 갈수록 빨리 식는 것입니다.
+
+        plt.tight_layout()
+        plt.show()
+
+
+
+
