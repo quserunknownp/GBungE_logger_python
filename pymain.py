@@ -96,4 +96,22 @@ if __name__ == "__main__":
 
     # visualizer.plot_gps_gforce_map()   
 
-    visualizer.plot_laps_slideshow()
+    # visualizer.plot_laps_slideshow()
+
+    # visualizer.plot_power_and_temp()
+    
+    # visualizer.analyze_moving_rms()
+
+    # visualizer.plot_temp_rise_vs_power()
+
+    # visualizer.plot_temp_slope_trend()
+
+    # visualizer.plot_thermal_path()
+
+    # visualizer.plot_thermal_path_v2()
+
+    visualizer.plot_power_vs_temp_slope()
+
+    # visualizer.plot_cooling_trend_regression()
+
+    # visualizer.plot_cooling_intercept()
