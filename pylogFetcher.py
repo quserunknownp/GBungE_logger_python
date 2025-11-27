@@ -164,9 +164,10 @@ class VehicleLog:
             self.acc_set        = np.concatenate((self.acc_set, new_acc),axis=1)
             self.gpsPos_set     = np.concatenate((self.gpsPos_set, new_gpsPos),axis=1)
             self.gpsVec_set     = np.concatenate((self.gpsVec_set, new_gpsVec),axis=1)
+    
     def parse_file(self, filepath, timestamp_offset=0):
         mls2sec = 0.001
-        rawAcc2g = 1.0     # 스케일링 팩터 확인 필요
+        rawAcc2g = 4.0 / 512.0     # 스케일링 팩터 확인 필요
         rawSpd2kph = 1.0   # 스케일링 팩터 확인 필요
 
         print(f"DEBUG: Parsing {os.path.basename(filepath)}")
@@ -363,8 +364,8 @@ class VehicleLog:
 
                         idx = self.cnt_gpsPos
                         self.gpsPos_set[0, idx] = timestamp_tmp
-                        self.gpsPos_set[1, idx] = lon / 10000.0
-                        self.gpsPos_set[2, idx] = lat / 10000.0
+                        self.gpsPos_set[1, idx] = lon / 10000000.0
+                        self.gpsPos_set[2, idx] = lat / 10000000.0
                         self.cnt_gpsPos += 1
 
                     elif key == 1: # GPS_VEC
@@ -384,6 +385,70 @@ class VehicleLog:
 
                 else:
                     fid.read(8) # Unknown source
+    
+    def split_laps(self, start_radius_m=1, min_lap_time_sec=30):
+        """
+        전체 데이터를 랩(Lap) 단위로 쪼개서 반환하는 함수
+        - start_radius_m: 스타트 라인 반경 (미터) - GPS 오차 고려 넉넉하게
+        - min_lap_time_sec: 최소 랩타임 (이 시간 안에는 다시 카운트 안 함)
+        """
+        if self.gpsPos_set is None: return []
+
+        # 1. GPS 데이터 준비 (NMEA 변환 포함)
+        t_gps = self.gpsPos_set[0, :]
+        lon_raw = self.gpsPos_set[1, :]
+        lat_raw = self.gpsPos_set[2, :]
+
+        # (NMEA 변환 로직 재사용)
+        if np.mean(lon_raw) > 180:
+            lon = np.floor(lon_raw/100) + (lon_raw%100)/60
+            lat = np.floor(lat_raw/100) + (lat_raw%100)/60
+        else:
+            lon, lat = lon_raw, lat_raw
+
+        # 2. 스타트 라인 정의 (첫 번째 유효 좌표)
+        # (0,0 노이즈 제외하고 첫 지점을 시작점으로)
+        valid_idx = np.where(lon > 1.0)[0]
+        if len(valid_idx) == 0: return []
+        
+        start_lon = lon[valid_idx[0]]
+        start_lat = lat[valid_idx[0]]
+        
+        # 3. 랩 분할 루프
+        laps = []
+        current_lap_start_idx = 0
+        last_pass_time = -min_lap_time_sec # 초반 통과 허용
+
+        # 위도/경도 1도 차이는 약 111km (약식 계산)
+        # 거리(m) ~= sqrt(dLat^2 + dLon^2) * 111000
+        deg_threshold = start_radius_m / 111000.0 
+
+        for i in range(valid_idx[0] + 10, len(t_gps)):
+            t_curr = t_gps[i]
+            
+            # 스타트 라인과의 거리 계산 (유클리드 거리)
+            dist_deg = np.sqrt((lon[i] - start_lon)**2 + (lat[i] - start_lat)**2)
+            
+            # [조건 1] 스타트 라인 반경 안에 들어왔고
+            # [조건 2] 마지막 통과 후 최소 시간이 지났다면 -> New Lap!
+            if (dist_deg < deg_threshold) and (t_curr - last_pass_time > min_lap_time_sec):
+                
+                # 이전 랩 저장 (인덱스 슬라이싱)
+                lap_data = {
+                    'idx_start': current_lap_start_idx,
+                    'idx_end': i,
+                    'time_duration': t_curr - last_pass_time if len(laps) > 0 else 0
+                }
+                laps.append(lap_data)
+                
+                # 상태 업데이트
+                current_lap_start_idx = i
+                last_pass_time = t_curr
+                
+                print(f"Lap {len(laps)} Found! Time: {t_curr:.1f}s")
+
+        print(f"총 {len(laps)}개의 랩을 찾았습니다.")
+        return laps
 
 # file select
 
