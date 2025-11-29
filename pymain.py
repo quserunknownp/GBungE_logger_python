@@ -110,8 +110,12 @@ if __name__ == "__main__":
 
     # visualizer.plot_thermal_path_v2()
 
-    visualizer.plot_power_vs_temp_slope()
+    # visualizer.plot_power_vs_temp_slope()
 
     # visualizer.plot_cooling_trend_regression()
 
     # visualizer.plot_cooling_intercept()
+
+    # visualizer.analyze_thermal_lag()
+
+    visualizer.plot_cooling_trend_high_temp()
