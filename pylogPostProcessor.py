@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import butter, filtfilt  # [필수] 신호처리 라이브러리
+from sklearn.metrics import r2_score
 
 class LogVisualizer:
     def __init__(self, log_data):
@@ -1987,6 +1988,260 @@ class LogVisualizer:
 
         plt.tight_layout()
         plt.show()
+
+    def analyze_thermal_lag(self, window_sec=15.0, min_power_kw=2.5, max_lag_sec=30.0):
+        """
+        [시스템 식별] 최적의 열 전달 지연 시간(Thermal Lag) 찾기
+        - 전력(입력)과 온도상승(출력) 사이의 시간차(phi)를 스캔하여
+        - 상관관계(Correlation)가 가장 높은 '진짜 반응 시간'을 찾아냅니다.
+        """
+  
+
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출 & 동기화
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        # 전압 시간축 기준 동기화
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+        power_kw_raw = (v_cap * i_sync) / 1000.0
+
+        # NaN 제거
+        mask = ~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)
+        t_v = t_v[mask]
+        temp_sync = temp_sync[mask]
+        power_kw = power_kw_raw[mask]
+
+        if len(t_v) == 0: return
+
+        # 2. 샘플링 정보
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        
+        # 3. Lag 스윕 (Sweep) 준비
+        # 0초부터 max_lag_sec까지 테스트
+        lags = np.arange(0, max_lag_sec, 0.5) # 0.5초 단위 검색
+        correlations = []
+        best_lag = 0
+        best_r2 = -999
+        best_slopes = []
+        best_powers = []
+        best_temps = []
+
+        print(f"INFO: Scanning Thermal Lag (0s ~ {max_lag_sec}s)...")
+
+        # 4. Lag별 상관분석 루프
+        for lag in lags:
+            lag_idx = int(lag * fs)
+            
+            curr_slopes = []
+            curr_powers = []
+            curr_temps = []
+            
+            # 슬라이딩 윈도우
+            # 전력은 t 구간, 온도는 t + lag 구간을 매칭
+            step = max(1, int(fs * 1.0)) # 속도를 위해 1초 단위 이동
+
+            for i in range(0, len(t_v) - window_len - lag_idx, step):
+                # 데이터 끊김 체크
+                if t_v[i + window_len - 1] - t_v[i] > window_sec * 1.5: continue
+
+                # 전력: 현재 시점 (원인)
+                power_chunk = power_kw[i : i + window_len]
+                avg_p = np.mean(power_chunk)
+                
+                # 필터링 (저부하 제외)
+                if avg_p < min_power_kw: continue
+
+                # 온도: Lag만큼 뒤의 시점 (결과)
+                idx_temp_start = i + lag_idx
+                t_chunk_temp = t_v[idx_temp_start : idx_temp_start + window_len]
+                temp_chunk = temp_sync[idx_temp_start : idx_temp_start + window_len]
+                
+                # 온도 기울기 계산
+                fit = np.polyfit(t_chunk_temp, temp_chunk, 1)
+                slope = fit[0] * 10.0 # 10초당 변화율
+
+                curr_slopes.append(slope)
+                curr_powers.append(avg_p)
+                curr_temps.append(np.mean(temp_chunk))
+
+            # 상관계수(R^2) 계산
+            if len(curr_slopes) > 10:
+                x = np.array(curr_slopes).reshape(-1, 1) # X: 기울기
+                y = np.array(curr_powers)                # Y: 전력
+                
+                # 단순 선형회귀 피팅 후 점수 계산
+                model_fit = np.polyfit(curr_slopes, curr_powers, 1)
+                model_fn = np.poly1d(model_fit)
+                y_pred = model_fn(curr_slopes)
+                
+                r2 = r2_score(y, y_pred)
+                correlations.append(r2)
+                
+                # 최적값 갱신
+                if r2 > best_r2:
+                    best_r2 = r2
+                    best_lag = lag
+                    best_slopes = curr_slopes
+                    best_powers = curr_powers
+                    best_temps = curr_temps
+            else:
+                correlations.append(0)
+
+        print(f"RESULT: Optimal Lag = {best_lag} sec (R^2 = {best_r2:.4f})")
+
+        # 5. 그래프 그리기 (2 Subplots)
+        fig = plt.figure(figsize=(14, 6))
+
+        # [Graph 1] Lag vs R2 Score
+        ax1 = fig.add_subplot(1, 2, 1)
+        ax1.plot(lags, correlations, 'b-o')
+        ax1.axvline(best_lag, color='r', linestyle='--', label=f'Best Lag: {best_lag}s')
+        ax1.set_xlabel('Time Lag (phi) [sec]')
+        ax1.set_ylabel('Correlation Score (R²)')
+        ax1.set_title('Optimization: Finding Thermal Delay')
+        ax1.legend()
+        ax1.grid(True)
+
+        # [Graph 2] 최적 Lag 적용 후 성능 곡선
+        ax2 = fig.add_subplot(1, 2, 2)
+        
+        x = np.array(best_slopes)
+        y = np.array(best_powers)
+        c = np.array(best_temps)
+        
+        sc = ax2.scatter(x, y, c=c, cmap='magma', s=20, alpha=0.6)
+        
+        # 추세선
+        if len(x) > 1:
+            trend = np.polyfit(x, y, 1)
+            x_range = np.linspace(x.min(), x.max(), 100)
+            ax2.plot(x_range, np.poly1d(trend)(x_range), 'b:', linewidth=3, 
+                     label=f'Optimized Trend (Lag={best_lag}s)')
+            
+            # Y절편 (한계 전력)
+            limit_kw = np.poly1d(trend)(0)
+            ax2.plot(0, limit_kw, 'rx', markersize=15, markeredgewidth=3)
+            ax2.text(0.1, limit_kw, f' Limit: {limit_kw:.1f} kW', color='red', fontweight='bold')
+
+        ax2.axvline(0, color='k', linestyle='--')
+        ax2.set_xlabel('Temperature Slope (°C / 10s)')
+        ax2.set_ylabel('Avg Input Power (kW)')
+        ax2.set_title(f'Corrected Performance Curve (Lag: {best_lag}s)')
+        ax2.grid(True)
+        ax2.legend()
+        
+        plt.colorbar(sc, ax=ax2, label='Temp (°C)')
+        plt.tight_layout()
+        plt.show()
+
+    def plot_cooling_trend_high_temp(self, window_sec=15.0, max_power_kw=1.0, min_temp=60.0):
+        """
+        [냉각 분석 v2] 고온 구간(60도 이상)에서의 순수 냉각 속도 분석
+        - 저온(포화) 영역 데이터 배제 -> 진짜 냉각 성능(기울기) 확인
+        """
+        if self.data.Vcap_set is None or self.data.Ibatt_set is None or self.data.motorTemp_set is None:
+            return
+
+        # 1. 데이터 추출
+        t_v = self.data.Vcap_set[0, :]
+        v_cap = self.data.Vcap_set[1, :]
+        t_i = self.data.Ibatt_set[0, :]
+        i_batt = self.data.Ibatt_set[1, :]
+        t_temp = self.data.motorTemp_set[0, :]
+        temp_val = self.data.motorTemp_set[1, :]
+
+        i_sync = np.interp(t_v, t_i, i_batt)
+        temp_sync = np.interp(t_v, t_temp, temp_val)
+        power_kw = (v_cap * i_sync) / 1000.0
+
+        # 2. [핵심] 이중 필터링 (Power < 1kW AND Temp > 60도)
+        # 이미 식어버린 데이터(Saturation)는 분석에서 뺍니다.
+        mask = (~np.isnan(v_cap) & ~np.isnan(i_sync) & ~np.isnan(temp_sync)) & \
+               (power_kw < max_power_kw) & \
+               (temp_sync >= min_temp)
+        
+        t_v = t_v[mask]
+        temp_sync = temp_sync[mask]
+        
+        if len(t_v) < 10:
+            print(f"조건을 만족하는 데이터가 없습니다. (Temp >= {min_temp}°C)")
+            return
+
+        # 3. 슬라이딩 윈도우 회귀
+        fs = 1.0 / np.mean(np.diff(t_v))
+        window_len = int(window_sec * fs)
+        if window_len < 2: window_len = 2
+        step = max(1, int(fs * 0.5))
+
+        slopes = []
+        avg_temps = []
+
+        print(f"INFO: Analyzing High-Temp Cooling (>{min_temp}°C)...")
+
+        for i in range(0, len(t_v) - window_len, step):
+            if t_v[i + window_len - 1] - t_v[i] > window_sec * 1.5:
+                continue
+
+            t_chunk = t_v[i : i + window_len]
+            temp_chunk = temp_sync[i : i + window_len]
+            
+            fit = np.polyfit(t_chunk, temp_chunk, 1)
+            
+            slopes.append(fit[0] * 10.0) 
+            avg_temps.append(np.mean(temp_chunk))
+
+        # 4. 그래프 그리기
+        x = np.array(avg_temps)
+        y = np.array(slopes)
+
+        plt.figure(figsize=(11, 9))
+        
+        # 산점도 (온도가 높을수록 붉은색)
+        plt.scatter(x, y, c=x, cmap='Reds', s=20, alpha=0.6, label='Cooling Data')
+        
+        plt.axhline(0, color='k', linestyle='--', linewidth=1.5)
+
+        # 추세선
+        if len(x) > 1:
+            trend = np.polyfit(x, y, 1)
+            trend_fn = np.poly1d(trend)
+            
+            x_range = np.linspace(x.min(), x.max(), 100)
+            plt.plot(x_range, trend_fn(x_range), 'b:', linewidth=3, label='High-Temp Cooling Trend')
+            
+            # 기울기(Cooling Coefficient) 재확인
+            k_value = trend[0]
+            
+            plt.text(x.min(), trend_fn(x.min()), 
+                     f' True Cooling Coeff (k): {k_value:.3f}', 
+                     color='blue', fontweight='bold', fontsize=14, verticalalignment='bottom')
+
+        plt.title(f'Pure Cooling Performance at High Temp (Temp > {min_temp}°C)')
+        plt.xlabel('Current Motor Temperature (°C)')
+        plt.ylabel('Cooling Speed (°C / 10sec)')
+        plt.grid(True)
+        plt.legend()
+        
+        # Y축 반전 (아래가 빠름)
+        # plt.gca().invert_yaxis() 
+
+        plt.tight_layout()
+        plt.show()
+
+
+
+
+
 
 
 
